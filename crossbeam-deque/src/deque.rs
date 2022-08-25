@@ -891,6 +891,32 @@ impl<T> Stealer<T> {
     /// assert_eq!(w2.pop(), Some(2));
     /// ```
     pub fn steal_batch_and_pop(&self, dest: &Worker<T>) -> Steal<T> {
+        self.steal_batch_and_pop_by(dest, MAX_BATCH - 1)
+    }
+
+    /// Steals a batch of tasks, pushes them into another worker, and pops a task from that worker.
+    ///
+    /// How many tasks exactly will be stolen is not specified. That said, this method will try to
+    /// steal around half of the tasks in the queue, but also not more than the given limit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crossbeam_deque::{Steal, Worker};
+    ///
+    /// let w1 = Worker::new_fifo();
+    /// w1.push(1);
+    /// w1.push(2);
+    /// w1.push(3);
+    /// w1.push(4);
+    ///
+    /// let s = w1.stealer();
+    /// let w2 = Worker::new_fifo();
+    ///
+    /// assert_eq!(s.steal_batch_and_pop(&w2), Steal::Success(1));
+    /// assert_eq!(w2.pop(), Some(2));
+    /// ```
+    pub fn steal_batch_and_pop_by(&self, dest: &Worker<T>, max_count: usize) -> Steal<T> {
         if Arc::ptr_eq(&self.inner, &dest.inner) {
             match dest.pop() {
                 None => return Steal::Empty,
@@ -922,7 +948,7 @@ impl<T> Stealer<T> {
         }
 
         // Reserve capacity for the stolen batch.
-        let batch_size = cmp::min((len as usize - 1) / 2, MAX_BATCH - 1);
+        let batch_size = cmp::min((len as usize - 1) / 2, max_count);
         dest.reserve(batch_size);
         let mut batch_size = batch_size as isize;
 
@@ -1582,6 +1608,10 @@ impl<T> Injector<T> {
         }
     }
 
+    pub fn steal_batch_and_pop(&self, dest: &Worker<T>) -> Steal<T>  {
+        self.steal_batch_and_pop_by(dest, MAX_BATCH + 1)
+    }
+
     /// Steals a batch of tasks, pushes them into a worker, and pops a task from that worker.
     ///
     /// How many tasks exactly will be stolen is not specified. That said, this method will try to
@@ -1602,7 +1632,7 @@ impl<T> Injector<T> {
     /// assert_eq!(q.steal_batch_and_pop(&w), Steal::Success(1));
     /// assert_eq!(w.pop(), Some(2));
     /// ```
-    pub fn steal_batch_and_pop(&self, dest: &Worker<T>) -> Steal<T> {
+    pub fn steal_batch_and_pop_by(&self, dest: &Worker<T>, max_size: usize) -> Steal<T> {
         let mut head;
         let mut block;
         let mut offset;
@@ -1639,15 +1669,15 @@ impl<T> Injector<T> {
             if (head >> SHIFT) / LAP != (tail >> SHIFT) / LAP {
                 new_head |= HAS_NEXT;
                 // We can steal all tasks till the end of the block.
-                advance = (BLOCK_CAP - offset).min(MAX_BATCH + 1);
+                advance = (BLOCK_CAP - offset).min(max_size);
             } else {
                 let len = (tail - head) >> SHIFT;
                 // Steal half of the available tasks.
-                advance = ((len + 1) / 2).min(MAX_BATCH + 1);
+                advance = ((len + 1) / 2).min(max_size);
             }
         } else {
             // We can steal all tasks till the end of the block.
-            advance = (BLOCK_CAP - offset).min(MAX_BATCH + 1);
+            advance = (BLOCK_CAP - offset).min(max_size);
         }
 
         new_head += advance << SHIFT;
